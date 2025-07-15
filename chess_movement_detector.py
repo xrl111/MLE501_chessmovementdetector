@@ -6,6 +6,8 @@ import logging
 import tkinter as tk
 from tkinter import filedialog
 from copy import deepcopy
+import tensorflow as tf
+from tensorflow.keras import models
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -19,6 +21,21 @@ EROSION_KERNEL = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
 # Global variables for manual point selection
 selected_points = []
 click_count = 0
+
+def load_cnn_model(model_path="/Users/macintoshhd/Downloads/MSE24/2025_semester_02/MLE501.9/final/model_dataset/PieceDetection/piece_classifier_model.h5"):
+    """Load the pre-trained CNN model for piece detection."""
+    piece_classes = ["P", "P_g", "N", "N_g", "B", "B_g", "R", "R_g", "Q", "Q_g", 
+                     "K", "K_g", "pb", "pb_g", "nb", "nb_g", "bb", "bb_g", 
+                     "rb", "rb_g", "qb", "qb_g", "kb", "kb_g", "empty"]
+    class_indices = {piece: idx for idx, piece in enumerate(piece_classes)}
+    
+    if not os.path.exists(model_path):
+        logging.error(f"Pre-trained model not found at {model_path}")
+        raise ValueError(f"Pre-trained model not found at {model_path}")
+    
+    logging.info(f"Loading pre-trained CNN model from {model_path}")
+    model = tf.keras.models.load_model(model_path)
+    return model, class_indices
 
 def select_video_file():
     """Open a file dialog to select a video file."""
@@ -207,32 +224,8 @@ def blur_border(img, border_size=10, blur_kernel=(15, 15)):
 
     return np.clip(result, 0, 255).astype(np.uint8)
 
-def load_templates(template_dir="templates", debug_dir="debug_output", debug=True):
-    """Load chess piece templates."""
-    pieces = ["P", "P_g", "N", "N_g", "B", "B_g", "R", "R_g", "Q", "Q_g", "K", "K_g", 
-              "pb", "pb_g", "nb", "nb_g", "bb", "bb_g", "rb", "rb_g", "qb", "qb_g", "kb", "kb_g"]
-    templates = {}
-    os.makedirs(debug_dir, exist_ok=True)
-
-    for p in pieces:
-        path = os.path.join(template_dir, f"{p}.png")
-        img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
-        if img is None:
-            logging.error(f"Template for {p} not found at {path}")
-            raise ValueError(f"Template for {p} not found at {path}")
-
-        resized = cv2.resize(img, (80, 80))
-        eroded = cv2.erode(resized, EROSION_KERNEL, iterations=1)
-        blurred = blur_border(eroded, border_size=6)
-        templates[p] = blurred
-
-        if debug:
-            cv2.imwrite(os.path.join(debug_dir, f"{p}_eroded.png"), eroded)
-
-    return templates
-
-def match_piece(square_img, img_name, templates, frame_idx, threshold=0.6, debug=False):
-    """Match a chess piece in a square image using template matching."""
+def predict_piece(square_img, img_name, model, class_indices, frame_idx, threshold=0.6, debug=False):
+    """Predict chess piece in a square image using the CNN model."""
     if square_img.size == 0 or square_img.shape[0] == 0 or square_img.shape[1] == 0:
         logging.warning(f"Empty square image: {img_name}")
         return None
@@ -241,39 +234,27 @@ def match_piece(square_img, img_name, templates, frame_idx, threshold=0.6, debug
     square_resized = cv2.resize(square_gray, (80, 80))
     square_resized = cv2.erode(square_resized, EROSION_KERNEL, iterations=1)
     square_resized = blur_border(square_resized, border_size=6)
-
-    max_val = 0
-    best_match = None
-    debug_frames = []
-
-    for piece, template in templates.items():
-        try:
-            res = cv2.matchTemplate(square_resized, template, cv2.TM_CCOEFF_NORMED)
-            _, val, _, _ = cv2.minMaxLoc(res)
-            if debug:
-                vis = np.hstack([square_resized, template])
-                vis_bgr = cv2.cvtColor(vis, cv2.COLOR_GRAY2BGR)
-                cv2.putText(vis_bgr, f"Piece: {piece} Score: {val:.2f}", (5, 64),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-                debug_frames.append((piece, vis_bgr))
-            if val > max_val:
-                max_val = val
-                best_match = piece
-        except cv2.error as e:
-            logging.error(f"matchTemplate error for {piece} in {img_name}: {e}")
-            continue
-
-    if max_val >= threshold:
-        if False:
-            frame_debug_dir = f'./debug_frames/frame_{frame_idx:03d}/match'
-            os.makedirs(frame_debug_dir, exist_ok=True)
-            best_vis = np.hstack([square_resized, templates[best_match]])
-            best_vis_bgr = cv2.cvtColor(best_vis, cv2.COLOR_GRAY2BGR)
-            cv2.putText(best_vis_bgr, f"{best_match} ({max_val:.2f})", (5, 64),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-            cv2.imwrite(f'{frame_debug_dir}/{img_name}_best_match.png', best_vis_bgr)
-            match_result.append(f"{img_name} match = {best_match}") 
-        return best_match
+    
+    # Prepare image for CNN
+    input_img = square_resized.reshape(1, 80, 80, 1) / 255.0
+    predictions = model.predict(input_img, verbose=0)
+    max_prob = np.max(predictions)
+    predicted_class_idx = np.argmax(predictions)
+    
+    # Map index back to piece
+    idx_to_piece = {idx: piece for piece, idx in class_indices.items()}
+    predicted_piece = idx_to_piece[predicted_class_idx]
+    
+    if debug:
+        frame_debug_dir = f'./debug_frames/frame_{frame_idx:03d}/match'
+        os.makedirs(frame_debug_dir, exist_ok=True)
+        cv2.imwrite(f'{frame_debug_dir}/{img_name}_input.png', square_resized)
+        with open(f'{frame_debug_dir}/{img_name}_prediction.txt', 'w') as f:
+            f.write(f"Predicted: {predicted_piece}, Probability: {max_prob:.2f}\n")
+        match_result.append(f"{img_name} predicted = {predicted_piece} ({max_prob:.2f})")
+    
+    if max_prob >= threshold and predicted_piece != "empty":
+        return predicted_piece
     return None
 
 def warp_board(crop, points):
@@ -305,9 +286,9 @@ def split_into_squares(board_img, debug_dir="./debug_frames"):
 
     if height < 8 * dy or width < 8 * dx:
         logging.warning(f"Warped board too small: {width}x{height}, need at least {8*dx}x{8*dy}")
-        top_pad = max(0, 8 * dy - height)
-        left_pad = max(0, 8 * dx - width)
-        board_img = cv2.copyMakeBorder(board_img, 0, top_pad, 0, left_pad, cv2.BORDER_CONSTANT, value=[0, 0, 0])
+        top_var = max(0, 8 * dy - height)
+        left_var = max(0, 8 * dx - width)
+        board_img = cv2.copyMakeBorder(board_img, 0, top_var, 0, left_var, cv2.BORDER_CONSTANT, value=[0, 0, 0])
         logging.info(f"Padded board to {board_img.shape[1]}x{board_img.shape[0]}")
 
     for row in range(8):
@@ -322,13 +303,13 @@ def split_into_squares(board_img, debug_dir="./debug_frames"):
             resized = cv2.resize(gray, (80, 80))
             name = f'square_r{row}_c{col}.png'
             debug_path = os.path.join(debug_dir, name)
-            #cv2.imwrite(debug_path, resized)
+            cv2.imwrite(debug_path, resized)
             squares.append(resized)
             square_names.append(name)
             square_positions.append((row, col))
     return squares, square_names, square_positions
 
-def generate_fen(squares, square_names, templates, frame_idx, debug=False):
+def generate_fen(squares, square_names, model, class_indices, frame_idx, debug=False):
     """
     Generate FEN string from the board squares.
     """
@@ -342,7 +323,7 @@ def generate_fen(squares, square_names, templates, frame_idx, debug=False):
 
     for i, (square, name) in enumerate(zip(squares, square_names)):
         row, col = i // 8, i % 8
-        piece = match_piece(square, name, templates, frame_idx, threshold=0.6, debug=debug)
+        piece = predict_piece(square, name, model, class_indices, frame_idx, threshold=0.6, debug=debug)
         if piece and piece in fen_map:
             board[row][col] = fen_map[piece]
             if debug:
@@ -409,7 +390,6 @@ def detect_movement(prev_board, curr_board):
     Returns:
         List of changed squares in algebraic notation (e.g., 'e2-e4', 'd4xe5')
     """
-    import logging
     changes = []
 
     for row in range(8):
@@ -544,7 +524,7 @@ def annotate_frame(frame, moves, frame_time, points, M):
     
     return annotated
 
-def main(start_time=0, end_time=10, frame_interval=1.0):
+def main(start_time=200, end_time=350, frame_interval=1):
     """Main function to process video, detect chessboard differences, and highlight in a loop."""
     out = None
     try:
@@ -639,8 +619,8 @@ def main(start_time=0, end_time=10, frame_interval=1.0):
                 [1280, 836]
             ], dtype="float32")
         
-        # Load templates
-        templates = load_templates()
+        # Load pre-trained CNN model
+        model, class_indices = load_cnn_model()
         
         # Process frames in a loop
         fen_results = []
@@ -679,7 +659,7 @@ def main(start_time=0, end_time=10, frame_interval=1.0):
 
                 # Piece detection
                 squares, square_names, square_positions = split_into_squares(board, debug_dir=frame_debug_dir)
-                fen, curr_board = generate_fen(squares, square_names, templates, frame_idx=frame_idx, debug=True)
+                fen, curr_board = generate_fen(squares, square_names, model, class_indices, frame_idx=frame_idx, debug=True)
                 
                 if fen is None:
                     logging.warning(f"Skipping frame {frame_idx} at {frame_time:.2f}s due to invalid FEN")
