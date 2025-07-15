@@ -24,9 +24,13 @@ click_count = 0
 
 def load_cnn_model(model_path="/Users/macintoshhd/Downloads/MSE24/2025_semester_02/MLE501.9/final/model_dataset/PieceDetection/piece_classifier_model.h5"):
     """Load the pre-trained CNN model for piece detection."""
-    piece_classes = ["P", "P_g", "N", "N_g", "B", "B_g", "R", "R_g", "Q", "Q_g", 
-                     "K", "K_g", "pb", "pb_g", "nb", "nb_g", "bb", "bb_g", 
-                     "rb", "rb_g", "qb", "qb_g", "kb", "kb_g", "empty"]
+    piece_classes = [
+        'WhitePawn', 'WhiteRook', 'WhiteKnight', 'WhiteBishop', 'WhiteQueen', 'WhiteKing',
+        'BlackPawn', 'BlackRook', 'BlackKnight', 'BlackBishop', 'BlackQueen', 'BlackKing',
+        'WhitePawn_g', 'WhiteRook_g', 'WhiteKnight_g', 'WhiteBishop_g', 'WhiteQueen_g', 'WhiteKing_g',
+        'BlackPawn_g', 'BlackRook_g', 'BlackKnight_g', 'BlackBishop_g', 'BlackQueen_g', 'BlackKing_g',
+        'empty'
+    ]
     class_indices = {piece: idx for idx, piece in enumerate(piece_classes)}
     
     if not os.path.exists(model_path):
@@ -92,7 +96,7 @@ def extract_digital_board(image, debug=False):
     if debug:
         os.makedirs('./debug_frames', exist_ok=True)
         cv2.imwrite('./debug_frames/_1_gray.png', gray)
-        cv2.imwrite('./debug_frames/_2_blurred.png', blurred)
+        cv2.imwrite('./debug_frames/_2_blurred.png', blurred)  # Fixed: Changed square_resized to blurred
         cv2.imwrite('./debug_frames/_3_thresh.png', thresh)
         cv2.imwrite('./debug_frames/_4_closed.png', closed)
         cv2.imwrite('./debug_frames/_5_edges.png', edges)
@@ -286,9 +290,9 @@ def split_into_squares(board_img, debug_dir="./debug_frames"):
 
     if height < 8 * dy or width < 8 * dx:
         logging.warning(f"Warped board too small: {width}x{height}, need at least {8*dx}x{8*dy}")
-        top_var = max(0, 8 * dy - height)
-        left_var = max(0, 8 * dx - width)
-        board_img = cv2.copyMakeBorder(board_img, 0, top_var, 0, left_var, cv2.BORDER_CONSTANT, value=[0, 0, 0])
+        top_pad = max(0, 8 * dy - height)
+        left_pad = max(0, 8 * dx - width)
+        board_img = cv2.copyMakeBorder(board_img, 0, top_pad, 0, left_pad, cv2.BORDER_CONSTANT, value=[0, 0, 0])
         logging.info(f"Padded board to {board_img.shape[1]}x{board_img.shape[0]}")
 
     for row in range(8):
@@ -315,10 +319,12 @@ def generate_fen(squares, square_names, model, class_indices, frame_idx, debug=F
     """
     board = [['' for _ in range(8)] for _ in range(8)]
     fen_map = {
-        'P': 'P', 'P_g': 'P', 'N': 'N', 'N_g': 'N', 'B': 'B', 'B_g': 'B',
-        'R': 'R', 'R_g': 'R', 'Q': 'Q', 'Q_g': 'Q', 'K': 'K', 'K_g': 'K',
-        'pb': 'p', 'pb_g': 'p', 'nb': 'n', 'nb_g': 'n', 'bb': 'b', 'bb_g': 'b',
-        'rb': 'r', 'rb_g': 'r', 'qb': 'q', 'qb_g': 'q', 'kb': 'k', 'kb_g': 'k'
+        'WhitePawn': 'P', 'WhitePawn_g': 'P', 'WhiteRook': 'R', 'WhiteRook_g': 'R',
+        'WhiteKnight': 'N', 'WhiteKnight_g': 'N', 'WhiteBishop': 'B', 'WhiteBishop_g': 'B',
+        'WhiteQueen': 'Q', 'WhiteQueen_g': 'Q', 'WhiteKing': 'K', 'WhiteKing_g': 'K',
+        'BlackPawn': 'p', 'BlackPawn_g': 'p', 'BlackRook': 'r', 'BlackRook_g': 'r',
+        'BlackKnight': 'n', 'BlackKnight_g': 'n', 'BlackBishop': 'b', 'BlackBishop_g': 'b',
+        'BlackQueen': 'q', 'BlackQueen_g': 'q', 'BlackKing': 'k', 'BlackKing_g': 'k'
     }
 
     for i, (square, name) in enumerate(zip(squares, square_names)):
