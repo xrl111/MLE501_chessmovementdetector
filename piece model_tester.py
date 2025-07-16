@@ -12,14 +12,11 @@ MODEL_PATH = "/Users/macintoshhd/Downloads/MSE24/2025_semester_02/MLE501.9/final
 
 # Default values
 image_dir = "/Users/macintoshhd/Downloads/MSE24/2025_semester_02/MLE501.9/final/templates"
-threshold = 0.4  # Lowered to capture more predictions
+threshold = 0.6
 
 def load_yolo_model(model_path=MODEL_PATH):
     """Load the pre-trained YOLOv8 model and verify class names."""
-    piece_classes = [
-        'WhitePawn', 'WhiteRook', 'WhiteKnight', 'WhiteBishop', 'WhiteQueen', 'WhiteKing',
-        'BlackPawn', 'BlackRook', 'BlackKnight', 'BlackBishop', 'BlackQueen', 'BlackKing', 'empty'
-    ]
+    piece_classes = ['B', 'K', 'N', 'P', 'Q', 'R', 'b', 'board', 'k', 'n', 'p', 'q', 'r']
     
     if not os.path.exists(model_path):
         logging.error(f"Pre-trained model not found at {model_path}")
@@ -39,18 +36,18 @@ def load_yolo_model(model_path=MODEL_PATH):
         logging.error(f"Failed to load YOLOv8 model: {e}")
         raise
 
-def predict_piece(image_path, model, class_indices, threshold=0.4, debug=False):
-    """Predict chess piece in a single image using the YOLOv8 model."""
+def predict_piece(image_path, model, class_indices, threshold=0.6, debug=False):
+    """Predict the best chess piece in a single-piece image."""
     try:
         square_img = cv2.imread(image_path)
         if square_img is None or square_img.size == 0:
             logging.warning(f"Failed to load image: {image_path}")
             return None
 
-        square_resized = cv2.resize(square_img, (96, 96))
+        square_resized = cv2.resize(square_img, (80, 80))  # Match training imgsz
         square_rgb = cv2.cvtColor(square_resized, cv2.COLOR_BGR2RGB)
         
-        results = model.predict(square_rgb, imgsz=96, conf=threshold, verbose=False, device="mps")
+        results = model.predict(square_rgb, imgsz=80, conf=threshold, verbose=False, device="mps")
         detections = results[0].boxes
         
         if len(detections) == 0:
@@ -58,29 +55,38 @@ def predict_piece(image_path, model, class_indices, threshold=0.4, debug=False):
                 logging.debug(f"No detections in {image_path}")
             return "board"
         
-        max_conf = 0
-        predicted_piece = None
+        best_piece = None
+        best_score = -1
         idx_to_piece = {idx: piece for piece, idx in class_indices.items()}
+        img_center = (40, 40)  # Center of 80x80 image
         
         for box in detections:
             conf = float(box.conf)
             class_idx = int(box.cls)
             piece = idx_to_piece.get(class_idx, "board")
-            if conf > max_conf and piece != "board":
-                max_conf = conf
-                predicted_piece = piece
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            center_x = (x1 + x2) // 2
+            center_y = (y1 + y2) // 2
+            dist_to_center = ((center_x - img_center[0]) ** 2 + (center_y - img_center[1]) ** 2) ** 0.5
+            score = conf / (dist_to_center + 1)  # Score based on confidence and centrality
+            
+            if conf >= threshold and piece != "board" and score > best_score:
+                best_score = score
+                best_piece = piece
         
-        if debug:
-            logging.info(f"{image_path}: Predicted {predicted_piece} (Confidence: {max_conf:.2f})")
+        if debug and best_piece:
+            logging.info(f"{image_path}: Predicted {best_piece} (Confidence: {conf:.2f}, Score: {best_score:.2f})")
             results[0].save(f"./test_detection_{os.path.basename(image_path)}")
+        elif debug and not best_piece:
+            logging.debug(f"No valid detection in {image_path}")
         
-        return predicted_piece if predicted_piece and max_conf >= threshold else "board"
+        return best_piece if best_piece else "board"
     except Exception as e:
         logging.warning(f"Prediction failed for {image_path}: {e}")
         return None
 
-def verify_model(image_dir, expected_labels, model, class_indices, threshold=0.4):
-    """Verify model performance against a set of images with known labels."""
+def verify_model(image_dir, expected_labels, model, class_indices, threshold=0.6):
+    """Verify model performance against a set of single-piece images with known labels."""
     correct = 0
     total = 0
     confusion_matrix = np.zeros((len(class_indices), len(class_indices)), dtype=int)
@@ -116,8 +122,9 @@ def verify_model(image_dir, expected_labels, model, class_indices, threshold=0.4
 
 if __name__ == "__main__":
     image_dir = "/Users/macintoshhd/Downloads/MSE24/2025_semester_02/MLE501.9/final/templates"
-    threshold = 0.4
+    threshold = 0.6
     
+    # Expected labels for single-piece images
     expected_labels = {
         "B_g.png": "B",  # WhiteBishop
         "K_g.png": "K",  # WhiteKing
@@ -131,7 +138,7 @@ if __name__ == "__main__":
         "p_g.png": "p",  # BlackPawn
         "q_g.png": "q",  # BlackQueen
         "r_g.png": "r",  # BlackRook
-        "empty_1.png": "board",  # Assuming 'board' is empty
+        "empty_1.png": "board",
     }
     
     model, class_indices, piece_classes = load_yolo_model()
