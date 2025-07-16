@@ -1,2 +1,18 @@
 dataset download:
 curl -L "https://universe.roboflow.com/ds/Km1UZuhpph?key=fcbZDX0xrI" > roboflow.zip; unzip roboflow.zip; rm roboflow.zip
+
+
+for i in {0..12}; do echo "Class $i: $(awk -v class=$i '$1==class {print FILENAME}' /content/chess_dataset/train/labels/*.txt | sort -u | wc -l)"; done
+Class 0: 2106
+Class 1: 2102
+Class 2: 2113
+Class 3: 2114
+Class 4: 2109
+Class 5: 2107
+Class 6: 2109
+Class 7: 2124
+Class 8: 2106
+Class 9: 2116
+Class 10: 2112
+Class 11: 2105
+Class 12: 2116
