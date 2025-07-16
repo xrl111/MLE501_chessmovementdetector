@@ -44,10 +44,10 @@ def predict_piece(image_path, model, class_indices, threshold=0.6, debug=False):
             logging.warning(f"Failed to load image: {image_path}")
             return None
 
-        square_resized = cv2.resize(square_img, (80, 80))  # Match training imgsz
+        square_resized = cv2.resize(square_img, (96, 96))  # Updated to 96
         square_rgb = cv2.cvtColor(square_resized, cv2.COLOR_BGR2RGB)
         
-        results = model.predict(square_rgb, imgsz=80, conf=threshold, verbose=False, device="mps")
+        results = model.predict(square_rgb, imgsz=96, conf=threshold, verbose=False, device="mps")
         detections = results[0].boxes
         
         if len(detections) == 0:
@@ -58,7 +58,7 @@ def predict_piece(image_path, model, class_indices, threshold=0.6, debug=False):
         best_piece = None
         best_score = -1
         idx_to_piece = {idx: piece for piece, idx in class_indices.items()}
-        img_center = (40, 40)  # Center of 80x80 image
+        img_center = (48, 48)  # Center of 96x96 image
         
         for box in detections:
             conf = float(box.conf)
