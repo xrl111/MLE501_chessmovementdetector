@@ -45,13 +45,25 @@ def preprocess_dataset(dataset_path, output_path, class_names):
     }
     remapped_class_names = sorted(set(label_remap.values()))
     
+    # Initialize image counts dictionary
+    image_counts = {
+        'train': defaultdict(int),
+        'valid': defaultdict(int)
+    }
+    
+    # Create directories for each class in train and valid splits
     for split in ['train', 'valid']:
         for cls in remapped_class_names:
             os.makedirs(os.path.join(output_path, split, cls), exist_ok=True)
 
+    # Process images and labels
     for split in ['train', 'valid']:
         image_dir = os.path.join(dataset_path, split, 'images')
         label_dir = os.path.join(dataset_path, split, 'labels')
+
+        if not os.path.exists(image_dir) or not os.path.exists(label_dir):
+            logger.warning(f"Missing image or label directory for {split}")
+            continue
 
         for img_file in os.listdir(image_dir):
             if not img_file.lower().endswith(('.jpg', '.png')):
@@ -61,6 +73,7 @@ def preprocess_dataset(dataset_path, output_path, class_names):
             label_path = os.path.join(label_dir, img_file.rsplit('.', 1)[0] + '.txt')
 
             if not os.path.exists(label_path):
+                logger.warning(f"Missing label file for {img_file}")
                 continue
 
             with open(label_path, 'r') as f:
@@ -69,38 +82,51 @@ def preprocess_dataset(dataset_path, output_path, class_names):
             for i, line in enumerate(lines):
                 parts = line.strip().split()
                 if len(parts) != 5:
+                    logger.warning(f"Invalid label format in {label_path}, line {i+1}")
                     continue
 
-                class_id, x_center, y_center, width, height = map(float, parts)
-                class_id = int(class_id)
-                if class_id >= len(class_names):
+                try:
+                    class_id, x_center, y_center, width, height = map(float, parts)
+                    class_id = int(class_id)
+                    if class_id >= len(class_names):
+                        logger.warning(f"Class ID {class_id} exceeds class_names length in {label_path}")
+                        continue
+
+                    orig_class = class_names[class_id]
+                    mapped_class = label_remap.get(orig_class, orig_class)
+
+                    img = cv2.imread(img_path)
+                    if img is None:
+                        logger.warning(f"Failed to load image {img_path}")
+                        continue
+
+                    h, w = img.shape[:2]
+                    x_center *= w
+                    y_center *= h
+                    width *= w
+                    height *= h
+                    x1 = int(max(x_center - width / 2, 0))
+                    y1 = int(max(y_center - height / 2, 0))
+                    x2 = int(min(x_center + width / 2, w))
+                    y2 = int(min(y_center + height / 2, h))
+
+                    cropped = img[y1:y2, x1:x2]
+                    if cropped.size == 0:
+                        logger.warning(f"Empty crop for {img_file}, skipping")
+                        continue
+
+                    save_name = f"{img_file.rsplit('.', 1)[0]}_{i}.jpg"
+                    save_path = os.path.join(output_path, split, mapped_class, save_name)
+                    cv2.imwrite(save_path, cropped)
+                    image_counts[split][mapped_class] += 1
+                    logger.debug(f"Saved {save_name} to {save_path}")
+
+                except Exception as e:
+                    logger.error(f"Error processing {img_file}, line {i+1}: {e}")
                     continue
 
-                orig_class = class_names[class_id]
-                mapped_class = label_remap.get(orig_class, orig_class)
-
-                img = cv2.imread(img_path)
-                if img is None:
-                    continue
-
-                h, w = img.shape[:2]
-                x_center *= w
-                y_center *= h
-                width *= w
-                height *= h
-                x1 = int(max(x_center - width / 2, 0))
-                y1 = int(max(y_center - height / 2, 0))
-                x2 = int(min(x_center + width / 2, w))
-                y2 = int(min(y_center + height / 2, h))
-
-                cropped = img[y1:y2, x1:x2]
-                if cropped.size == 0:
-                    continue
-
-                save_name = f"{img_file.rsplit('.', 1)[0]}_{i}.jpg"
-                save_path = os.path.join(output_path, split, mapped_class, save_name)
-                cv2.imwrite(save_path, cropped)
-
+    logger.info(f"Image counts per class: {dict(image_counts['train'])} for train, {dict(image_counts['valid'])} for valid")
+    return image_counts
 
 def main():
     # Step 1: Install dependencies
