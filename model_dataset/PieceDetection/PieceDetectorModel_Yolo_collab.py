@@ -40,8 +40,8 @@ def inspect_dataset(dataset_path):
 def preprocess_dataset(dataset_path, output_path, class_names):
     """Convert detection dataset to classification dataset, excluding 'board' class."""
     label_remap = {
-        "B": "b", "K": "board", "N": "k", "P": "n", "Q": "p", "R": "q",
-        "b": "B", "board": "r", "k": "K", "n": "N", "p": "P", "q": "Q", "r": "R"
+        "B": "b", "N": "k", "P": "n", "Q": "p", "R": "q", "K": "r",  # White pieces mapped to black
+        "b": "B", "k": "K", "n": "N", "p": "P", "q": "Q", "r": "R"   # Black pieces mapped to white
     }
 
     excluded_class = "board"
@@ -98,7 +98,7 @@ def preprocess_dataset(dataset_path, output_path, class_names):
                     mapped_class = label_remap.get(orig_class, orig_class)
 
                     # Skip 'board' class
-                    if mapped_class == excluded_class:
+                    if mapped_class == excluded_class or orig_class == excluded_class:
                         continue
 
                     img = cv2.imread(img_path)
@@ -154,8 +154,8 @@ def main():
         logger.error("Missing 'train' or 'valid' folders")
         return
 
-    # Step 4: Define class names (label index must match order)
-    class_names = ['b', 'k', 'n', 'p', 'q', 'r', 'B', 'K', 'N', 'P', 'Q', 'R', 'board']  # Full list including 'board'
+    # Step 4: Define class names (excluding 'board')
+    class_names = ['b', 'k', 'n', 'p', 'q', 'r', 'B', 'K', 'N', 'P', 'Q', 'R']  # Excluded 'board'
 
     # Step 5: Inspect dataset
     class_ids = inspect_dataset(dataset_path)
