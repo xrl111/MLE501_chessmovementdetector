@@ -38,12 +38,14 @@ def inspect_dataset(dataset_path):
     return class_ids
 
 def preprocess_dataset(dataset_path, output_path, class_names):
-    """Convert detection dataset to classification dataset, with remapped labels."""
+    """Convert detection dataset to classification dataset, excluding 'board' class."""
     label_remap = {
         "B": "b", "K": "board", "N": "k", "P": "n", "Q": "p", "R": "q",
         "b": "B", "board": "r", "k": "K", "n": "N", "p": "P", "q": "Q", "r": "R"
     }
-    remapped_class_names = sorted(set(label_remap.values()))
+
+    excluded_class = "board"
+    remapped_class_names = sorted({v for k, v in label_remap.items() if v != excluded_class})
 
     # Initialize image counts dictionary
     image_counts = {
@@ -94,6 +96,10 @@ def preprocess_dataset(dataset_path, output_path, class_names):
 
                     orig_class = class_names[class_id]
                     mapped_class = label_remap.get(orig_class, orig_class)
+
+                    # Skip 'board' class
+                    if mapped_class == excluded_class:
+                        continue
 
                     img = cv2.imread(img_path)
                     if img is None:
@@ -149,14 +155,14 @@ def main():
         return
 
     # Step 4: Define class names (label index must match order)
-    class_names = ['b', 'k', 'n', 'p', 'q', 'r', 'B', 'K', 'N', 'P', 'Q', 'R', 'board']  # 13 classes
+    class_names = ['b', 'k', 'n', 'p', 'q', 'r', 'B', 'K', 'N', 'P', 'Q', 'R', 'board']  # Full list including 'board'
 
     # Step 5: Inspect dataset
     class_ids = inspect_dataset(dataset_path)
     if max(class_ids.keys(), default=-1) >= len(class_names):
         logger.warning("Class IDs exceed available class_names list. Check alignment.")
 
-    # Step 6: Preprocess to classification dataset
+    # Step 6: Preprocess to classification dataset (excluding 'board')
     output_path = "/content/chess_classification_dataset"
     image_counts = preprocess_dataset(dataset_path, output_path, class_names)
 
@@ -180,7 +186,7 @@ def main():
 
     try:
         model.train(
-            data=output_path,  # DO NOT use data.yaml
+            data=output_path,  # No YAML needed
             epochs=10,
             imgsz=224,
             batch=16,
