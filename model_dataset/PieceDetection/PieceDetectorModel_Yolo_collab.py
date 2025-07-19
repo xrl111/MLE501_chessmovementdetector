@@ -10,11 +10,10 @@ from collections import defaultdict
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def inspect_dataset(dataset_path, class_names):
-    """Inspect class IDs from detection labels and log invalid ones."""
+def inspect_dataset(dataset_path):
+    """Inspect class IDs from detection labels."""
     class_ids = defaultdict(int)
     sample_labels = []
-    invalid_label_files = []
     for split in ['train', 'valid']:
         label_dir = os.path.join(dataset_path, split, 'labels')
         if not os.path.exists(label_dir):
@@ -23,92 +22,30 @@ def inspect_dataset(dataset_path, class_names):
         for label_file in os.listdir(label_dir):
             if not label_file.endswith('.txt'):
                 continue
-            label_path = os.path.join(label_dir, label_file)
-            with open(label_path, 'r') as f:
+            with open(os.path.join(label_dir, label_file), 'r') as f:
                 lines = f.readlines()
                 if not lines:
                     continue
                 try:
-                    for line in lines:
-                        class_id = int(line.strip().split()[0])
-                        class_ids[class_id] += 1
-                        if class_id >= len(class_names):
-                            invalid_label_files.append(f"{split}/{label_file}: class_id={class_id}")
-                        elif len(sample_labels) < 5:
-                            sample_labels.append(f"{split}/{label_file}: {line.strip()}")
+                    class_id = int(lines[0].strip().split()[0])
+                    class_ids[class_id] += 1
+                    if len(sample_labels) < 5:
+                        sample_labels.append(f"{split}/{label_file}: {lines[0].strip()}")
                 except (ValueError, IndexError):
-                    logger.warning(f"Invalid label format in {label_path}")
+                    logger.warning(f"Invalid label format in {label_file}")
     logger.info(f"Unique class IDs: {dict(class_ids)}")
     logger.info("Sample labels:\n" + "\n".join(sample_labels))
-    if invalid_label_files:
-        logger.warning(f"Found {len(invalid_label_files)} labels with invalid class IDs:\n" + "\n".join(invalid_label_files[:5]))
     return class_ids
 
-def clean_dataset(dataset_path, class_names):
-    """Remove or skip labels with invalid class IDs (e.g., 'board')."""
-    cleaned_path = os.path.join(dataset_path, "cleaned")
-    os.makedirs(cleaned_path, exist_ok=True)
-    valid_class_ids = set(range(len(class_names)))
-    
-    for split in ['train', 'valid']:
-        image_dir = os.path.join(dataset_path, split, 'images')
-        label_dir = os.path.join(dataset_path, split, 'labels')
-        cleaned_image_dir = os.path.join(cleaned_path, split, 'images')
-        cleaned_label_dir = os.path.join(cleaned_path, split, 'labels')
-        os.makedirs(cleaned_image_dir, exist_ok=True)
-        os.makedirs(cleaned_label_dir, exist_ok=True)
-
-        if not os.path.exists(image_dir) or not os.path.exists(label_dir):
-            logger.warning(f"Missing image or label directory for {split}")
-            continue
-
-        for img_file in os.listdir(image_dir):
-            if not img_file.lower().endswith(('.jpg', '.png')):
-                continue
-            img_path = os.path.join(image_dir, img_file)
-            label_path = os.path.join(label_dir, img_file.rsplit('.', 1)[0] + '.txt')
-            cleaned_label_path = os.path.join(cleaned_label_dir, img_file.rsplit('.', 1)[0] + '.txt')
-
-            if not os.path.exists(label_path):
-                logger.warning(f"Missing label file for {img_file}")
-                continue
-
-            valid_lines = []
-            with open(label_path, 'r') as f:
-                lines = f.readlines()
-                for line in lines:
-                    try:
-                        class_id = int(line.strip().split()[0])
-                        if class_id in valid_class_ids:
-                            valid_lines.append(line)
-                    except (ValueError, IndexError):
-                        logger.warning(f"Skipping invalid line in {label_path}: {line.strip()}")
-                        continue
-
-            if valid_lines:
-                shutil.copy(img_path, os.path.join(cleaned_image_dir, img_file))
-                with open(cleaned_label_path, 'w') as f:
-                    f.writelines(valid_lines)
-                logger.debug(f"Cleaned label file saved: {cleaned_label_path}")
-            else:
-                logger.debug(f"Skipping {img_file}: no valid labels after filtering")
-
-    return cleaned_path
-
 def preprocess_dataset(dataset_path, output_path, class_names):
-    """Convert detection dataset to classification dataset, fixing swapped labels and excluding 'board' class."""
-    # Step 1: Fix swapped black/white labels
-    label_remap_step1 = {
-        "B": "b", "N": "k", "P": "n", "Q": "p", "R": "q", "K": "r",  # White pieces mapped to black
-        "b": "B", "k": "K", "n": "N", "p": "P", "q": "Q", "r": "R"   # Black pieces mapped to white
+    """Convert detection dataset to classification dataset, excluding 'board' class."""
+    label_remap = {
+        "B": "b", "K": "board", "N": "k", "P": "n", "Q": "p", "R": "q",
+        "b": "B", "board": "r", "k": "K", "n": "N", "p": "P", "q": "Q", "r": "R"
     }
-    # Step 2: Map to explicit class names
-    label_remap_step2 = {
-        'b': 'bp', 'k': 'bk', 'n': 'bn', 'p': 'bp', 'q': 'bq', 'r': 'br',  # Black pieces
-        'B': 'wp', 'K': 'wk', 'N': 'wn', 'P': 'wp', 'Q': 'wq', 'R': 'wr'   # White pieces
-    }
+
     excluded_class = "board"
-    filtered_class_names = [cls for cls in class_names if cls not in ['b', 'k', 'n', 'p', 'q', 'r', 'B', 'K', 'N', 'P', 'Q', 'R', 'board']]
+    remapped_class_names = sorted({v for k, v in label_remap.items() if v != excluded_class})
 
     # Initialize image counts dictionary
     image_counts = {
@@ -118,7 +55,7 @@ def preprocess_dataset(dataset_path, output_path, class_names):
 
     # Create directories for each class in train and valid splits
     for split in ['train', 'valid']:
-        for cls in filtered_class_names:
+        for cls in remapped_class_names:
             os.makedirs(os.path.join(output_path, split, cls), exist_ok=True)
 
     # Process images and labels
@@ -158,11 +95,10 @@ def preprocess_dataset(dataset_path, output_path, class_names):
                         continue
 
                     orig_class = class_names[class_id]
-                    # Apply two-step remapping
-                    intermediate_class = label_remap_step1.get(orig_class, orig_class)
-                    mapped_class = label_remap_step2.get(intermediate_class, intermediate_class)
-                    if mapped_class == excluded_class or orig_class == excluded_class:
-                        logger.debug(f"Skipping {img_file} line {i+1}: class '{orig_class}' is 'board' or maps to 'board'")
+                    mapped_class = label_remap.get(orig_class, orig_class)
+
+                    # Skip 'board' class
+                    if mapped_class == excluded_class:
                         continue
 
                     img = cv2.imread(img_path)
@@ -218,29 +154,19 @@ def main():
         logger.error("Missing 'train' or 'valid' folders")
         return
 
-    # Step 4: Define class names with original and corrected labels
-    class_names = [
-        'b', 'k', 'n', 'p', 'q', 'r',  # Original black piece labels (to be remapped)
-        'B', 'K', 'N', 'P', 'Q', 'R',  # Original white piece labels (to be remapped)
-        'bp', 'bk', 'bb', 'bn', 'bq', 'br',  # Correct black pieces
-        'wp', 'wk', 'wb', 'wn', 'wq', 'wr',  # Correct white pieces
-        'board'  # Excluded class
-    ]
+    # Step 4: Define class names (label index must match order)
+    class_names = ['b', 'k', 'n', 'p', 'q', 'r', 'B', 'K', 'N', 'P', 'Q', 'R', 'board']  # Full list including 'board'
 
     # Step 5: Inspect dataset
-    class_ids = inspect_dataset(dataset_path, class_names)
+    class_ids = inspect_dataset(dataset_path)
     if max(class_ids.keys(), default=-1) >= len(class_names):
-        logger.warning("Class IDs exceed available class_names list. Cleaning dataset.")
+        logger.warning("Class IDs exceed available class_names list. Check alignment.")
 
-    # Step 6: Clean dataset to remove invalid labels
-    cleaned_dataset_path = clean_dataset(dataset_path, class_names)
-    logger.info(f"Cleaned dataset saved to {cleaned_dataset_path}")
-
-    # Step 7: Preprocess to classification dataset
+    # Step 6: Preprocess to classification dataset (excluding 'board')
     output_path = "/content/chess_classification_dataset"
-    image_counts = preprocess_dataset(cleaned_dataset_path, output_path, class_names)
+    image_counts = preprocess_dataset(dataset_path, output_path, class_names)
 
-    # Step 8: Final checks
+    # Step 7: Final checks
     train_dir = os.path.join(output_path, 'train')
     valid_dir = os.path.join(output_path, 'valid')
     if not os.path.exists(train_dir) or not os.path.exists(valid_dir):
@@ -250,7 +176,7 @@ def main():
         logger.error("No images after preprocessing. Aborting.")
         return
 
-    # Step 9: Load classifier and train
+    # Step 8: Load classifier and train
     try:
         model = YOLO("yolov8n-cls.pt")
         logger.info("YOLOv8n-cls model loaded.")
@@ -260,24 +186,24 @@ def main():
 
     try:
         model.train(
-            data=output_path,
+            data=output_path,  # No YAML needed
             epochs=10,
             imgsz=224,
             batch=16,
             name="chess_piece_classifier",
             patience=10,
-            device=0,
+            device=0,  # GPU
             optimizer="Adam",
             lr0=0.001
         )
         logger.info("Training completed.")
 
-        # Step 10: Evaluate
+        # Step 9: Evaluate
         metrics = model.val()
         logger.info(f"Validation Top-1 Accuracy: {metrics.top1 * 100:.2f}%")
         logger.info(f"Validation Top-5 Accuracy: {metrics.top5 * 100:.2f}%")
 
-        # Step 11: Export
+        # Step 10: Export
         model.export(format="onnx")
         logger.info("Model exported to ONNX.")
 
