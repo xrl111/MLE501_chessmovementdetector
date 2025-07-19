@@ -5,13 +5,14 @@ import cv2
 from pathlib import Path
 from ultralytics import YOLO
 from collections import defaultdict
+import numpy as np
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def inspect_dataset(dataset_path):
-    """Inspect class IDs from detection labels."""
+    """Inspect class IDs from detection labels and verify dataset balance."""
     class_ids = defaultdict(int)
     sample_labels = []
     for split in ['train', 'valid']:
@@ -33,17 +34,24 @@ def inspect_dataset(dataset_path):
                         sample_labels.append(f"{split}/{label_file}: {lines[0].strip()}")
                 except (ValueError, IndexError):
                     logger.warning(f"Invalid label format in {label_file}")
-    logger.info(f"Unique class IDs: {dict(class_ids)}")
+    logger.info(f"Class ID distribution: {dict(class_ids)}")
     logger.info("Sample labels:\n" + "\n".join(sample_labels))
+    
+    # Check for class imbalance
+    if class_ids:
+        counts = np.array(list(class_ids.values()))
+        imbalance_ratio = max(counts) / min(counts) if min(counts) > 0 else float('inf')
+        if imbalance_ratio > 5:
+            logger.warning(f"Class imbalance detected (ratio: {imbalance_ratio:.2f}). Consider balancing dataset.")
     return class_ids
 
 def preprocess_dataset(dataset_path, output_path, class_names):
     """Convert detection dataset to classification dataset, excluding 'board' class."""
+    # Restored original label mapping to fix swapped labels in dataset
     label_remap = {
         "B": "b", "K": "board", "N": "k", "P": "n", "Q": "p", "R": "q",
         "b": "B", "board": "r", "k": "K", "n": "N", "p": "P", "q": "Q", "r": "R"
     }
-
     excluded_class = "board"
     remapped_class_names = sorted({v for k, v in label_remap.items() if v != excluded_class})
 
@@ -121,6 +129,8 @@ def preprocess_dataset(dataset_path, output_path, class_names):
                         logger.warning(f"Empty crop for {img_file}, skipping")
                         continue
 
+                    # Resize to consistent size
+                    cropped = cv2.resize(cropped, (224, 224), interpolation=cv2.INTER_AREA)
                     save_name = f"{img_file.rsplit('.', 1)[0]}_{i}.jpg"
                     save_path = os.path.join(output_path, split, mapped_class, save_name)
                     cv2.imwrite(save_path, cropped)
@@ -136,7 +146,7 @@ def preprocess_dataset(dataset_path, output_path, class_names):
 
 def main():
     # Step 1: Install dependencies
-    # os.system("pip install -q ultralytics opencv-python")
+    # os.system("pip install -q ultralytics opencv-python numpy")
 
     # Step 2: Download dataset
     try:
@@ -186,15 +196,23 @@ def main():
 
     try:
         model.train(
-            data=output_path,  # No YAML needed
-            epochs=10,
+            data=output_path,
+            epochs=20,
             imgsz=224,
-            batch=16,
+            batch=32,
             name="chess_piece_classifier",
-            patience=10,
-            device=0,  # GPU
-            optimizer="Adam",
-            lr0=0.001
+            patience=5,
+            device=0,
+            optimizer="AdamW",
+            lr0=0.0005,
+            augment=True,
+            hsv_h=0.015,
+            hsv_s=0.7,
+            hsv_v=0.4,
+            flipud=0.5,
+            fliplr=0.5,
+            mosaic=0.5,
+            mixup=0.2
         )
         logger.info("Training completed.")
 
@@ -203,7 +221,20 @@ def main():
         logger.info(f"Validation Top-1 Accuracy: {metrics.top1 * 100:.2f}%")
         logger.info(f"Validation Top-5 Accuracy: {metrics.top5 * 100:.2f}%")
 
-        # Step 10: Export
+        # Step 10: Test on sample images
+        for split in ['train', 'valid']:
+            for cls in os.listdir(os.path.join(output_path, split)):
+                cls_dir = os.path.join(output_path, split, cls)
+                if not os.path.isdir(cls_dir):
+                    continue
+                for img_file in os.listdir(cls_dir)[:2]:  # Test 2 images per class
+                    img_path = os.path.join(cls_dir, img_file)
+                    results = model(img_path)
+                    pred_class = results[0].names[results[0].probs.top1]
+                    confidence = results[0].probs.top1conf.item()
+                    logger.info(f"{img_file} → {pred_class} ({confidence:.2f})")
+
+        # Step 11: Export
         model.export(format="onnx")
         logger.info("Model exported to ONNX.")
 
