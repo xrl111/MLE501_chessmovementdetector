@@ -44,13 +44,13 @@ def preprocess_dataset(dataset_path, output_path, class_names):
         "b": "B", "board": "r", "k": "K", "n": "N", "p": "P", "q": "Q", "r": "R"
     }
     remapped_class_names = sorted(set(label_remap.values()))
-    
+
     # Initialize image counts dictionary
     image_counts = {
         'train': defaultdict(int),
         'valid': defaultdict(int)
     }
-    
+
     # Create directories for each class in train and valid splits
     for split in ['train', 'valid']:
         for cls in remapped_class_names:
@@ -130,7 +130,7 @@ def preprocess_dataset(dataset_path, output_path, class_names):
 
 def main():
     # Step 1: Install dependencies
-    os.system("pip install -q ultralytics opencv-python")
+    # os.system("pip install -q ultralytics opencv-python")
 
     # Step 2: Download dataset
     try:
@@ -181,7 +181,7 @@ def main():
     try:
         model.train(
             data=output_path,  # DO NOT use data.yaml
-            epochs=50,
+            epochs=10,
             imgsz=224,
             batch=16,
             name="chess_piece_classifier",
