@@ -86,7 +86,6 @@ def clean_dataset(dataset_path, class_names):
                         continue
 
             if valid_lines:
-                # Copy image and save cleaned label file
                 shutil.copy(img_path, os.path.join(cleaned_image_dir, img_file))
                 with open(cleaned_label_path, 'w') as f:
                     f.writelines(valid_lines)
@@ -97,14 +96,19 @@ def clean_dataset(dataset_path, class_names):
     return cleaned_path
 
 def preprocess_dataset(dataset_path, output_path, class_names):
-    """Convert detection dataset to classification dataset, excluding 'board' class."""
-    label_remap = {
+    """Convert detection dataset to classification dataset, fixing swapped labels and excluding 'board' class."""
+    # Step 1: Fix swapped black/white labels
+    label_remap_step1 = {
         "B": "b", "N": "k", "P": "n", "Q": "p", "R": "q", "K": "r",  # White pieces mapped to black
         "b": "B", "k": "K", "n": "N", "p": "P", "q": "Q", "r": "R"   # Black pieces mapped to white
     }
-
+    # Step 2: Map to explicit class names
+    label_remap_step2 = {
+        'b': 'bp', 'k': 'bk', 'n': 'bn', 'p': 'bp', 'q': 'bq', 'r': 'br',  # Black pieces
+        'B': 'wp', 'K': 'wk', 'N': 'wn', 'P': 'wp', 'Q': 'wq', 'R': 'wr'   # White pieces
+    }
     excluded_class = "board"
-    remapped_class_names = sorted({v for k, v in label_remap.items() if v != excluded_class})
+    filtered_class_names = [cls for cls in class_names if cls not in ['b', 'k', 'n', 'p', 'q', 'r', 'B', 'K', 'N', 'P', 'Q', 'R', 'board']]
 
     # Initialize image counts dictionary
     image_counts = {
@@ -114,7 +118,7 @@ def preprocess_dataset(dataset_path, output_path, class_names):
 
     # Create directories for each class in train and valid splits
     for split in ['train', 'valid']:
-        for cls in remapped_class_names:
+        for cls in filtered_class_names:
             os.makedirs(os.path.join(output_path, split, cls), exist_ok=True)
 
     # Process images and labels
@@ -154,10 +158,11 @@ def preprocess_dataset(dataset_path, output_path, class_names):
                         continue
 
                     orig_class = class_names[class_id]
-                    mapped_class = label_remap.get(orig_class, orig_class)
-
-                    # Skip 'board' class
+                    # Apply two-step remapping
+                    intermediate_class = label_remap_step1.get(orig_class, orig_class)
+                    mapped_class = label_remap_step2.get(intermediate_class, intermediate_class)
                     if mapped_class == excluded_class or orig_class == excluded_class:
+                        logger.debug(f"Skipping {img_file} line {i+1}: class '{orig_class}' is 'board' or maps to 'board'")
                         continue
 
                     img = cv2.imread(img_path)
@@ -213,8 +218,14 @@ def main():
         logger.error("Missing 'train' or 'valid' folders")
         return
 
-    # Step 4: Define class names (excluding 'board')
-    class_names = ['b', 'k', 'n', 'p', 'q', 'r', 'B', 'K', 'N', 'P', 'Q', 'R']  # Excluded 'board'
+    # Step 4: Define class names with original and corrected labels
+    class_names = [
+        'b', 'k', 'n', 'p', 'q', 'r',  # Original black piece labels (to be remapped)
+        'B', 'K', 'N', 'P', 'Q', 'R',  # Original white piece labels (to be remapped)
+        'bp', 'bk', 'bb', 'bn', 'bq', 'br',  # Correct black pieces
+        'wp', 'wk', 'wb', 'wn', 'wq', 'wr',  # Correct white pieces
+        'board'  # Excluded class
+    ]
 
     # Step 5: Inspect dataset
     class_ids = inspect_dataset(dataset_path, class_names)
@@ -225,7 +236,7 @@ def main():
     cleaned_dataset_path = clean_dataset(dataset_path, class_names)
     logger.info(f"Cleaned dataset saved to {cleaned_dataset_path}")
 
-    # Step 7: Preprocess to classification dataset (excluding 'board')
+    # Step 7: Preprocess to classification dataset
     output_path = "/content/chess_classification_dataset"
     image_counts = preprocess_dataset(cleaned_dataset_path, output_path, class_names)
 
@@ -249,13 +260,13 @@ def main():
 
     try:
         model.train(
-            data=output_path,  # No YAML needed
+            data=output_path,
             epochs=10,
             imgsz=224,
             batch=16,
             name="chess_piece_classifier",
             patience=10,
-            device=0,  # GPU
+            device=0,
             optimizer="Adam",
             lr0=0.001
         )
