@@ -6,7 +6,6 @@ from pathlib import Path
 from ultralytics import YOLO
 from collections import defaultdict
 import numpy as np
-from albumentations import Compose, Rotate, HorizontalFlip
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -46,8 +45,8 @@ def inspect_dataset(dataset_path):
             logger.warning(f"Class imbalance detected (ratio: {imbalance_ratio:.2f}). Consider balancing dataset.")
     return class_ids
 
-def preprocess_dataset(dataset_path, output_path, class_names):
-    """Convert detection dataset to classification dataset, fixing labels and converting to grayscale."""
+def preprocess_dataset(dataset_path, output_path, class_names, custom_dataset_path):
+    """Convert detection dataset to classification dataset, using custom images from provided path."""
     # Corrected label remapping to fix dataset label errors
     label_remap = {
         "B": "b",       # Original 'B' → black bishop
@@ -67,6 +66,15 @@ def preprocess_dataset(dataset_path, output_path, class_names):
     excluded_class = "board"
     remapped_class_names = sorted({v for k, v in label_remap.items() if v != excluded_class})
 
+    # Define custom dataset mapping
+    custom_mapping = {
+        'bb_g.png': 'b', 'K.png': 'K', 'nb_g.png': 'n', 'N.png': 'N', 'pb_g.png': 'p',
+        'rb.png': 'r', 'B_g.png': 'B', 'rb_g.png': 'r', 'kb.png': 'k', 'qb.png': 'q',
+        'N_g.png': 'N', 'Q_g.png': 'Q', 'pb.png': 'p', 'B.png': 'B', 'qb_g.png': 'q',
+        'bb.png': 'b', 'nb.png': 'n', 'R.png': 'R', 'R_g.png': 'R', 'kb_g.png': 'k',
+        'P_g.png': 'P', 'K_g.png': 'K', 'P.png': 'P', 'Q.png': 'Q'
+    }
+
     # Initialize image counts dictionary
     image_counts = {
         'train': defaultdict(int),
@@ -78,14 +86,47 @@ def preprocess_dataset(dataset_path, output_path, class_names):
         for cls in remapped_class_names:
             os.makedirs(os.path.join(output_path, split, cls), exist_ok=True)
 
-    # Augmentation for underrepresented classes (white pieces)
-    augmentations = [
-        Rotate(limit=30, p=0.5),
-        HorizontalFlip(p=0.5),
-    ]
-    aug = Compose(augmentations)
+    # Copy custom dataset images to train and valid splits
+    if not os.path.exists(custom_dataset_path):
+        logger.error(f"Custom dataset path {custom_dataset_path} does not exist.")
+        return image_counts
 
-    # Process images and labels
+    for img_file in os.listdir(custom_dataset_path):
+        if img_file not in custom_mapping:
+            logger.warning(f"Image {img_file} not found in custom mapping, skipping.")
+            continue
+
+        mapped_class = custom_mapping[img_file]
+        if mapped_class not in remapped_class_names:
+            logger.warning(f"Mapped class {mapped_class} for {img_file} not in valid classes, skipping.")
+            continue
+
+        img_path = os.path.join(custom_dataset_path, img_file)
+        img = cv2.imread(img_path)
+        if img is None:
+            logger.warning(f"Failed to load image {img_path}")
+            continue
+
+        # Convert to grayscale
+        img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        img = cv2.cvtColor(img_gray, cv2.COLOR_GRAY2BGR)
+
+        # Resize to consistent size
+        img = cv2.resize(img, (224, 224), interpolation=cv2.INTER_AREA)
+
+        # Save to both train and valid splits (e.g., 80% train, 20% valid)
+        save_name = f"custom_{img_file}"
+        if np.random.rand() < 0.8:
+            split = 'train'
+        else:
+            split = 'valid'
+
+        save_path = os.path.join(output_path, split, mapped_class, save_name)
+        cv2.imwrite(save_path, img)
+        image_counts[split][mapped_class] += 1
+        logger.debug(f"Saved {save_name} to {save_path} (Class: {mapped_class})")
+
+    # Process original dataset images and labels (to maintain compatibility)
     for split in ['train', 'valid']:
         image_dir = os.path.join(dataset_path, split, 'images')
         label_dir = os.path.join(dataset_path, split, 'labels')
@@ -160,16 +201,6 @@ def preprocess_dataset(dataset_path, output_path, class_names):
                     image_counts[split][mapped_class] += 1
                     logger.debug(f"Saved {save_name} to {save_path} (Original: {orig_class}, Remapped: {mapped_class})")
 
-                    # Augment white pieces to address class imbalance
-                    if mapped_class in ['B', 'K', 'N', 'P', 'Q', 'R']:
-                        for aug_idx in range(2):  # Generate 2 augmented versions
-                            aug_img = aug(image=cropped)['image']
-                            aug_save_name = f"{img_file.rsplit('.', 1)[0]}_{i}_aug{aug_idx}.jpg"
-                            aug_save_path = os.path.join(output_path, split, mapped_class, aug_save_name)
-                            cv2.imwrite(aug_save_path, aug_img)
-                            image_counts[split][mapped_class] += 1
-                            logger.debug(f"Saved augmented {aug_save_name} to {aug_save_path}")
-
                 except Exception as e:
                     logger.error(f"Error processing {img_file}, line {i+1}: {e}")
                     continue
@@ -179,7 +210,7 @@ def preprocess_dataset(dataset_path, output_path, class_names):
 
 def main():
     # Step 1: Install dependencies
-    os.system("pip install -q ultralytics opencv-python numpy albumentations")
+    os.system("pip install -q ultralytics opencv-python numpy")
 
     # Step 2: Download dataset
     try:
@@ -207,7 +238,8 @@ def main():
 
     # Step 6: Preprocess to classification dataset (excluding 'board')
     output_path = "/content/chess_classification_dataset"
-    image_counts = preprocess_dataset(dataset_path, output_path, class_names)
+    custom_dataset_path = "/content/drive/MyDrive/MSE24_HN/chess_dataset"
+    image_counts = preprocess_dataset(dataset_path, output_path, class_names, custom_dataset_path)
 
     # Step 7: Final checks
     train_dir = os.path.join(output_path, 'train')
@@ -269,7 +301,7 @@ def main():
                     if confidence < confidence_threshold:
                         logger.warning(f"Low confidence ({confidence:.2f}) for {img_file}, skipping")
                         continue
-                    pred_class = results[0].names[results[0].probs.top1]
+                    pred_class = results[0].names[results[0].Probs.top1]
                     logger.info(f"{img_file} → {pred_class} ({confidence:.2f})")
 
         # Step 11: Export
