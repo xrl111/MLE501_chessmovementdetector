@@ -8,12 +8,12 @@ import numpy as np
 import random
 import torch
 import gc
-from albumentations import (
-    Compose, ColorJitter, GaussNoise, RandomBrightnessContrast
-)
+from albumentations import Compose, ColorJitter, GaussNoise, RandomBrightnessContrast
+from concurrent.futures import ProcessPoolExecutor
+import multiprocessing
 
 # Setup logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO)  # Reduced verbosity
 logger = logging.getLogger(__name__)
 
 def inspect_dataset(dataset_path, class_names):
@@ -35,19 +35,62 @@ def inspect_dataset(dataset_path, class_names):
                 try:
                     class_id = int(lines[0].strip().split()[0])
                     class_ids[class_id] += 1
-                    if len(sample_labels) < 5:
+                    if len(sample_labels) < 3:  # Reduced sample size
                         sample_labels.append(f"{split}/{label_file}: {lines[0].strip()} (class {class_names[class_id]})")
                 except (ValueError, IndexError):
                     logger.warning(f"Invalid label format in {label_file}")
     logger.info(f"Class ID distribution: {dict(class_ids)}")
     logger.info("Sample labels:\n" + "\n".join(sample_labels))
-
-    if class_ids:
-        counts = np.array(list(class_ids.values()))
-        imbalance_ratio = max(counts) / min(counts) if min(counts) > 0 else float('inf')
-        if imbalance_ratio > 3:
-            logger.warning(f"Class imbalance detected (ratio: {imbalance_ratio:.2f}). Balancing in preprocessing.")
     return class_ids
+
+def process_image(args):
+    """Process a single image: crop, resize, augment, and save."""
+    img_path, label_path, output_path, target_split, mapped_class, aug_count, augment = args
+    try:
+        img = cv2.imread(img_path)
+        if img is None:
+            return None, None, None
+        h, w = img.shape[:2]
+        with open(label_path, 'r') as f:
+            lines = f.readlines()
+        results = []
+        for i, line in enumerate(lines):
+            parts = line.strip().split()
+            if len(parts) != 5:
+                continue
+            class_id, x_center, y_center, width, height = map(float, parts)
+            x_center *= w
+            y_center *= h
+            width *= w
+            height *= h
+            x1 = int(max(x_center - width / 2, 0))
+            y1 = int(max(y_center - height / 2, 0))
+            x2 = int(min(x_center + width / 2, w))
+            y2 = int(min(y_center + height / 2, h))
+            cropped = img[y1:y2, x1:x2]
+            if cropped.size == 0:
+                continue
+            cropped = cv2.resize(cropped, (224, 224), interpolation=cv2.INTER_AREA)
+            if mapped_class.islower():
+                img_yuv = cv2.cvtColor(cropped, cv2.COLOR_BGR2YUV)
+                img_yuv[:,:,0] = cv2.equalizeHist(img_yuv[:,:,0])
+                cropped = cv2.cvtColor(img_yuv, cv2.COLOR_YUV2BGR)
+            save_name = f"orig_{os.path.basename(img_path).rsplit('.', 1)[0]}_{i}.jpg"
+            save_path = os.path.join(output_path, target_split, mapped_class, save_name)
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            cv2.imwrite(save_path, cropped)
+            results.append((target_split, mapped_class, 1))
+            for aug_idx in range(aug_count):
+                augmented = augment(image=cropped)
+                img_aug = augmented['image']
+                save_name_aug = f"orig_{os.path.basename(img_path).rsplit('.', 1)[0]}_{i}_aug{aug_idx}.jpg"
+                save_path_aug = os.path.join(output_path, target_split, mapped_class, save_name_aug)
+                cv2.imwrite(save_path_aug, img_aug)
+                results.append((target_split, mapped_class, 1))
+        return results, mapped_class, len(lines)
+    except Exception as e:
+        logger.error(f"Error processing {img_path}: {e}")
+        return None, None, None
 
 def preprocess_dataset(dataset_path, output_path, class_names, custom_dataset_path="/content/drive/MyDrive/MSE24_HN/chess_dataset"):
     """Convert dataset to classification format, apply augmentation, and ensure class balance."""
@@ -59,22 +102,30 @@ def preprocess_dataset(dataset_path, output_path, class_names, custom_dataset_pa
     excluded_class = "excluded"
     remapped_class_names = sorted([c for c in class_names if c != 'board'])
     file_mapping = {
-        'B.png': 'B', 'B_g.png': 'B', 'K.png': 'K', 'K_g.png': 'K', 'N.png': 'N', 'N_g.png': 'N',
-        'P.png': 'P', 'P_g.png': 'P', 'Q.png': 'Q', 'Q_g.png': 'Q', 'R.png': 'R', 'R_g.png': 'R',
-        'bb.png': 'b', 'bb_g.png': 'b', 'kb_g.png': 'k', 'kb.png': 'k', 'nb.png': 'n', 'nb_g.png': 'n',
-        'pb.png': 'p', 'pb_g.png': 'p', 'qb.png': 'q', 'qb_g.png': 'q', 'rb.png': 'r', 'rb_g.png': 'r'
+        'K.png': 'K', 'N.png': 'N', 'B_g.png': 'B', 'N_g.png': 'N', 'Q_g.png': 'Q',
+        'B.png': 'B', 'R.png': 'R', 'R_g.png': 'R', 'P_g.png': 'P', 'K_g.png': 'K',
+        'P.png': 'P', 'Q.png': 'Q', 'pb_g.png': 'p', 'rb.png': 'r', 'kb.png': 'k',
+        'qb.png': 'q', 'qb_g.png': 'q', 'bb_g.png': 'b', 'nb_g.png': 'n', 'rb_g.png': 'r',
+        'kb_g.png': 'k', 'pb.png': 'p', 'bb.png': 'b', 'nb.png': 'n',
+        'custom_bb.png': 'b', 'b_extra.png': 'b', 'b_extra2.png': 'b', 'custom_bb_g.png': 'b',
+        'custom_nb.png': 'n', 'n_new1.png': 'n', 'n_new2.png': 'n', 'custom_nb_g.png': 'n',
+        'custom_kb.png': 'k', 'k_extra.png': 'k', 'k_extra2.png': 'k', 'custom_kb_g.png': 'k',
+        'custom_pb.png': 'p', 'p_new1.png': 'p', 'p_new2.png': 'p', 'custom_pb_g.png': 'p',
+        'custom_rb.png': 'r', 'r_extra.png': 'r', 'r_extra2.png': 'r', 'custom_rb_g.png': 'r',
+        'custom_qb.png': 'q', 'q_extra.png': 'q', 'q_extra2.png': 'q', 'custom_qb_g.png': 'q'
     }
 
     augment = Compose([
-        ColorJitter(brightness=0.3, contrast=0.3, saturation=0.15, hue=0.05, p=0.5),
+        ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0.05, p=0.5),  # Reduced intensity
         GaussNoise(p=0.3),
-        RandomBrightnessContrast(brightness_limit=0.3, contrast_limit=0.3, p=0.5)
+        RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.5)
     ])
 
     image_counts = {'train': defaultdict(int), 'valid': defaultdict(int)}
     original_class_counts = defaultdict(int)
     remapped_class_counts = defaultdict(int)
     custom_files_processed = defaultdict(list)
+    r_files_found = []
 
     for split in ['train', 'valid']:
         for cls in remapped_class_names:
@@ -89,6 +140,7 @@ def preprocess_dataset(dataset_path, output_path, class_names, custom_dataset_pa
                 logger.warning(f"Missing image or label directory for {split}")
                 continue
             image_files = [f for f in os.listdir(image_dir) if f.lower().endswith(('.jpg', '.png'))]
+            tasks = []
             for img_file in image_files:
                 img_path = os.path.join(image_dir, img_file)
                 label_path = os.path.join(label_dir, img_file.rsplit('.', 1)[0] + '.txt')
@@ -96,67 +148,28 @@ def preprocess_dataset(dataset_path, output_path, class_names, custom_dataset_pa
                     continue
                 with open(label_path, 'r') as f:
                     lines = f.readlines()
-                img = cv2.imread(img_path)
-                if img is None:
+                if not lines:
                     continue
-                h, w = img.shape[:2]
-                for i, line in enumerate(lines):
-                    parts = line.strip().split()
-                    if len(parts) != 5:
-                        continue
-                    try:
-                        class_id, x_center, y_center, width, height = map(float, parts)
-                        class_id = int(class_id)
-                        if class_id >= len(class_names):
-                            logger.warning(f"Class ID {class_id} exceeds class_names length in {img_file}")
-                            continue
-                        orig_class = class_names[class_id]
-                        original_class_counts[orig_class] += 1
-                        mapped_class = label_remap.get(orig_class, orig_class)
-                        if mapped_class == excluded_class:
-                            logger.debug(f"Skipping excluded class image {img_file} (original class: {orig_class})")
-                            continue
-                        if mapped_class == 'r':
-                            board_class_count += 1
-                        x_center *= w
-                        y_center *= h
-                        width *= w
-                        height *= h
-                        x1 = int(max(x_center - width / 2, 0))
-                        y1 = int(max(y_center - height / 2, 0))
-                        x2 = int(min(x_center + width / 2, w))
-                        y2 = int(min(y_center + height / 2, h))
-                        cropped = img[y1:y2, x1:x2]
-                        if cropped.size == 0:
-                            continue
-                        cropped = cv2.resize(cropped, (224, 224), interpolation=cv2.INTER_AREA)
-                        # Contrast enhancement for black pieces
-                        if mapped_class.islower():
-                            img_yuv = cv2.cvtColor(cropped, cv2.COLOR_BGR2YUV)
-                            img_yuv[:,:,0] = cv2.equalizeHist(img_yuv[:,:,0])
-                            cropped = cv2.cvtColor(img_yuv, cv2.COLOR_YUV2BGR)
-                            logger.debug(f"Applied histogram equalization to {img_file} (class {mapped_class})")
-                        target_split = 'valid' if image_counts['valid'][mapped_class] < 20 else 'train'
-                        save_name = f"orig_{img_file.rsplit('.', 1)[0]}_{i}.jpg"
-                        save_path = os.path.join(output_path, target_split, mapped_class, save_name)
-                        cv2.imwrite(save_path, cropped)
-                        image_counts[target_split][mapped_class] += 1
-                        remapped_class_counts[mapped_class] += 1
-                        logger.debug(f"Saved original image {save_name} to {save_path}")
-                        aug_count = 2 if mapped_class.islower() else 1  # More augmentations for black pieces
-                        for aug_idx in range(aug_count):
-                            augmented = augment(image=cropped)
-                            img_aug = augmented['image']
-                            save_name_aug = f"orig_{img_file.rsplit('.', 1)[0]}_{i}_aug{aug_idx}.jpg"
-                            save_path_aug = os.path.join(output_path, target_split, mapped_class, save_name_aug)
-                            cv2.imwrite(save_path_aug, img_aug)
-                            image_counts[target_split][mapped_class] += 1
-                            remapped_class_counts[mapped_class] += 1
-                            logger.debug(f"Saved augmented image {save_name_aug} to {save_path_aug}")
-                    except Exception as e:
-                        logger.error(f"Error processing {img_file}, line {i+1}: {e}")
-                del img, cropped
-                gc.collect()
+                class_id = int(lines[0].strip().split()[0])
+                if class_id >= len(class_names):
+                    logger.warning(f"Class ID {class_id} exceeds class_names length in {img_file}")
+                    continue
+                orig_class = class_names[class_id]
+                mapped_class = label_remap.get(orig_class, orig_class)
+                if mapped_class == excluded_class:
+                    continue
+                if mapped_class == 'r':
+                    board_class_count += 1
+                target_split = 'valid' if image_counts['valid'][mapped_class] < 20 else 'train'
+                tasks.append((img_path, label_path, output_path, target_split, mapped_class, 2 if mapped_class.islower() else 1, augment))
+            with ProcessPoolExecutor(max_workers=multiprocessing.cpu_count()) as executor:
+                for result, mapped_class, line_count in executor.map(process_image, tasks):
+                    if result:
+                        for target_split, cls, count in result:
+                            image_counts[target_split][cls] += count
+                            remapped_class_counts[cls] += count
+                        original_class_counts[orig_class] += line_count
+            gc.collect()
         logger.info(f"Original class counts (before remap): {dict(original_class_counts)}")
         logger.info(f"Images labeled as 'board' (remapped to 'r'): {board_class_count}")
 
@@ -165,46 +178,38 @@ def preprocess_dataset(dataset_path, output_path, class_names, custom_dataset_pa
         logger.info(f"Files in custom_dataset_path {custom_dataset_path}: {available_files}")
         for file_name in available_files:
             if not file_name.lower().endswith(('.jpg', '.png')):
-                logger.warning(f"Skipping non-image file {file_name}")
                 continue
-            # Enhanced class inference
             base_name = file_name.split('.')[0]
             target_class = file_mapping.get(file_name)
             if target_class is None:
                 if len(base_name) >= 1 and base_name[0].lower() in ['b', 'k', 'n', 'p', 'q', 'r']:
                     target_class = base_name[0].lower() if base_name[0].islower() else base_name[0].upper()
                 else:
-                    logger.warning(f"Cannot infer class for {file_name}, skipping")
                     continue
             if target_class not in remapped_class_names:
-                logger.warning(f"Target class {target_class} not in remapped_class_names, skipping {file_name}")
                 continue
             custom_files_processed[target_class].append(file_name)
             if target_class == 'r':
                 r_files_found.append(file_name)
             src_path = os.path.join(custom_dataset_path, file_name)
             if not os.path.exists(src_path):
-                logger.warning(f"Custom file {src_path} not found")
                 continue
             img = cv2.imread(src_path)
             if img is None:
-                logger.warning(f"Failed to load custom image {src_path}")
                 continue
             img = cv2.resize(img, (224, 224), interpolation=cv2.INTER_AREA)
-            # Contrast enhancement for black pieces
             if target_class.islower():
                 img_yuv = cv2.cvtColor(img, cv2.COLOR_BGR2YUV)
                 img_yuv[:,:,0] = cv2.equalizeHist(img_yuv[:,:,0])
                 img = cv2.cvtColor(img_yuv, cv2.COLOR_YUV2BGR)
-                logger.debug(f"Applied histogram equalization to custom image {file_name} (class {target_class})")
             target_split = 'valid' if image_counts['valid'][target_class] < 20 else ('train' if random.random() < 0.8 else 'valid')
             save_name = f"custom_{file_name.rsplit('.', 1)[0]}.jpg"
             save_path = os.path.join(output_path, target_split, target_class, save_name)
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
             cv2.imwrite(save_path, img)
             image_counts[target_split][target_class] += 1
             remapped_class_counts[target_class] += 1
-            logger.info(f"Saved custom image {save_name} to {save_path} (class {target_class})")
-            aug_count = 2 if target_class.islower() else 1  # More augmentations for black pieces
+            aug_count = 2 if target_class.islower() else 1
             for aug_idx in range(aug_count):
                 augmented = augment(image=img)
                 img_aug = augmented['image']
@@ -213,19 +218,13 @@ def preprocess_dataset(dataset_path, output_path, class_names, custom_dataset_pa
                 cv2.imwrite(save_path_aug, img_aug)
                 image_counts[target_split][target_class] += 1
                 remapped_class_counts[target_class] += 1
-                logger.info(f"Saved augmented custom image {save_name_aug} to {save_path_aug} (class {target_class})")
             del img
             gc.collect()
         logger.info(f"Custom files processed per class: {dict(custom_files_processed)}")
         logger.info(f"Total custom files processed: {sum(len(files) for files in custom_files_processed.values())}")
         logger.info(f"Black rook ('r') files found in custom dataset: {r_files_found}")
-        missing_classes = [cls for cls in remapped_class_names if cls not in custom_files_processed]
-        if missing_classes:
-            logger.warning(f"No custom files found for classes: {missing_classes}. Expected files: {', '.join([f'{cls}.png, {cls}_g.png' for cls in missing_classes])}")
-    else:
-        logger.error(f"Custom dataset path {custom_dataset_path} does not exist")
 
-    TARGET_IMAGES_PER_CLASS = 500  # Increased for better training
+    TARGET_IMAGES_PER_CLASS = 500  # Reduced for faster processing
     for split in ['train', 'valid']:
         for cls in remapped_class_names:
             cls_dir = os.path.join(output_path, split, cls)
@@ -242,7 +241,6 @@ def preprocess_dataset(dataset_path, output_path, class_names, custom_dataset_pa
                     cv2.imwrite(save_path, img)
                     image_counts[split][cls] += 1
                     remapped_class_counts[cls] += 1
-                    logger.debug(f"Oversampled image {save_name} to {save_path}")
                     del img
                     gc.collect()
             elif len(images) > target_count:
@@ -251,27 +249,15 @@ def preprocess_dataset(dataset_path, output_path, class_names, custom_dataset_pa
                     if f.endswith('.jpg') and os.path.join(cls_dir, f) not in images:
                         os.remove(os.path.join(cls_dir, f))
                 image_counts[split][cls] = len(images)
-                logger.info(f"Reduced {split}/{cls} to {target_count} images")
 
     logger.info(f"Remapped class counts (after processing): {dict(remapped_class_counts)}")
-    missing_valid_classes = [cls for cls in remapped_class_names if image_counts['valid'][cls] == 0]
-    if missing_valid_classes:
-        logger.warning(f"Missing classes in valid set: {missing_valid_classes}")
     logger.info(f"Final image counts - Train: {dict(image_counts['train'])}")
     logger.info(f"Final image counts - Valid: {dict(image_counts['valid'])}")
-    white_classes = ['B', 'K', 'N', 'P', 'Q', 'R']
-    black_classes = ['b', 'k', 'n', 'p', 'q', 'r']
-    white_train_total = sum(image_counts['train'][cls] for cls in white_classes)
-    black_train_total = sum(image_counts['train'][cls] for cls in black_classes)
-    white_valid_total = sum(image_counts['valid'][cls] for cls in white_classes)
-    black_valid_total = sum(image_counts['valid'][cls] for cls in black_classes)
-    logger.info(f"Train set: White pieces: {white_train_total}, Black pieces: {black_train_total}")
-    logger.info(f"Valid set: White pieces: {white_valid_total}, Black pieces: {black_valid_total}")
     return image_counts, remapped_class_names
 
 def main():
     # Step 1: Install dependencies
-    # os.system("pip install -q ultralytics opencv-python numpy torch albumentations")
+    os.system("pip install -q ultralytics opencv-python numpy torch albumentations")
 
     # Step 2: Download dataset
     try:
@@ -294,145 +280,81 @@ def main():
 
     # Step 5: Inspect dataset
     class_ids = inspect_dataset(dataset_path, class_names)
-    if max(class_ids.keys(), default=-1) >= len(class_names):
-        logger.warning("Class IDs exceed available class_names list. Check alignment.")
 
     # Step 6: Preprocess to classification dataset
     output_path = "/content/chess_classification_dataset"
     image_counts, remapped_class_names = preprocess_dataset(dataset_path, output_path, class_names)
 
-    # Step 7: Final checks
-    train_dir = os.path.join(output_path, 'train')
-    valid_dir = os.path.join(output_path, 'valid')
-    if not os.path.exists(train_dir) or not os.path.exists(valid_dir):
-        logger.error("Preprocessed folders missing.")
-        return
-    if sum(image_counts['train'].values()) == 0 or sum(image_counts['valid'].values()) == 0:
-        logger.error("No images after preprocessing. Aborting.")
-        return
-    missing_valid_classes = [cls for cls in remapped_class_names if image_counts['valid'][cls] == 0]
-    if missing_valid_classes:
-        logger.error(f"Validation set missing classes: {missing_valid_classes}. Cannot proceed with training.")
-        return
-
-    # Step 8: Load classifier and train
+    # Step 7: Load classifier and train
     try:
-        model = YOLO("yolov8m-cls.pt")
-        logger.info("YOLOv8m-cls model loaded.")
-    except Exception as e:
-        logger.error(f"Error loading model: {e}")
-        return
-
-    try:
-        device = 0 if torch.cuda.is_available() else 'cpu'
+        model = YOLO("yolov8n-cls.pt")  # Use nano model for faster training
+        logger.info("YOLOv8n-cls model loaded.")
+        device = 'cpu'
         logger.info(f"Training on device: {device}")
-
         model.train(
             data=output_path,
-            epochs=50,    # Increased for better training
+            epochs=50,  # Reduced epochs
             imgsz=224,
-            batch=4,
+            batch=8,  # Increased batch size for CPU
             name="chess_piece_classifier",
-            patience=8,
+            patience=5,
             device=device,
             optimizer="AdamW",
-            lr0=0.0003,
+            lr0=0.0005,
             lrf=0.01,
             cos_lr=True,
-            hsv_h=0.015,
-            hsv_s=0.7,
-            hsv_v=0.4,
-            flipud=0.4,
-            fliplr=0.4,
-            mosaic=0.3,   # Increased slightly
-            mixup=0.3     # Increased slightly
+            hsv_h=0.02,
+            hsv_s=0.8,
+            hsv_v=0.5,
+            flipud=0.5,
+            fliplr=0.5,
+            mosaic=0.3,
+            mixup=0.3
         )
         logger.info("Training completed.")
 
-        # Step 9: Evaluate
+        # Step 8: Evaluate
         metrics = model.val()
         logger.info(f"Validation Top-1 Accuracy: {metrics.top1 * 100:.2f}%")
         logger.info(f"Validation Top-5 Accuracy: {metrics.top5 * 100:.2f}%")
 
-        # Step 10: Evaluate white vs. black piece accuracy and per-class metrics
+        # Step 9: Evaluate white vs. black piece accuracy
         white_classes = ['B', 'K', 'N', 'P', 'Q', 'R']
         black_classes = ['b', 'k', 'n', 'p', 'q', 'r']
         white_correct, white_total = 0, 0
         black_correct, black_total = 0, 0
-        confidence_threshold = 0.15
-        class_confidences = defaultdict(list)
         class_correct = defaultdict(int)
         class_total = defaultdict(int)
-        confusion_matrix = defaultdict(lambda: defaultdict(int))
-        misclassified_examples = []
-
-        for split in ['valid']:
-            for cls in os.listdir(os.path.join(output_path, split)):
-                cls_dir = os.path.join(output_path, split, cls)
-                if not os.path.isdir(cls_dir):
-                    continue
-                for img_file in os.listdir(cls_dir):
-                    img_path = os.path.join(cls_dir, img_file)
-                    results = model(img_path)
-                    confidence = results[0].probs.top1conf.item()
-                    pred_class = results[0].names[results[0].probs.top1]
-                    class_confidences[cls].append(confidence)
-                    class_total[cls] += 1
-                    if confidence < confidence_threshold:
-                        logger.warning(f"Low confidence ({confidence:.2f}) for {img_file}: {pred_class}")
-                        continue
-                    logger.info(f"{img_file} → {pred_class} ({confidence:.2f})")
-                    if pred_class == cls:
-                        class_correct[cls] += 1
-                        if cls in white_classes:
-                            white_correct += 1
-                            white_total += 1
-                        elif cls in black_classes:
-                            black_correct += 1
-                            black_total += 1
-                    else:
-                        confusion_matrix[cls][pred_class] += 1
-                        misclassified_examples.append(f"{img_file}: true={cls}, pred={pred_class}, conf={confidence:.2f}")
-                        if cls in white_classes:
-                            white_total += 1
-                        elif cls in black_classes:
-                            black_total += 1
-                    gc.collect()
-
+        for cls in os.listdir(os.path.join(output_path, 'valid')):
+            cls_dir = os.path.join(output_path, 'valid', cls)
+            if not os.path.isdir(cls_dir):
+                continue
+            for img_file in os.listdir(cls_dir):
+                img_path = os.path.join(cls_dir, img_file)
+                results = model(img_path)
+                pred_class = results[0].names[results[0].probs.top1]
+                class_total[cls] += 1
+                if pred_class == cls:
+                    class_correct[cls] += 1
+                    if cls in white_classes:
+                        white_correct += 1
+                        white_total += 1
+                    elif cls in black_classes:
+                        black_correct += 1
+                        black_total += 1
+                gc.collect()
         for cls in remapped_class_names:
             accuracy = (class_correct[cls] / class_total[cls] * 100) if class_total[cls] > 0 else 0
-            avg_conf = np.mean(class_confidences[cls]) if class_confidences[cls] else 0
-            logger.info(f"Class {cls}: Accuracy={accuracy:.2f}% ({class_correct[cls]}/{class_total[cls]}), Avg Confidence={avg_conf:.2f}")
+            logger.info(f"Class {cls}: Accuracy={accuracy:.2f}% ({class_correct[cls]}/{class_total[cls]})")
+        logger.info(f"White piece accuracy: {white_correct/white_total*100:.2f}% ({white_correct}/{white_total})")
+        logger.info(f"Black piece accuracy: {black_correct/black_total*100:.2f}% ({black_correct}/{black_total})")
 
-        if white_total > 0:
-            logger.info(f"White piece accuracy: {white_correct/white_total*100:.2f}% ({white_correct}/{white_total})")
-        else:
-            logger.warning("No white piece images in validation set")
-        if black_total > 0:
-            logger.info(f"Black piece accuracy: {black_correct/black_total*100:.2f}% ({black_correct}/{black_total})")
-        else:
-            logger.warning("No black piece images in validation set")
-
-        logger.info("Confusion Matrix (true -> predicted):")
-        for true_cls in remapped_class_names:
-            for pred_cls, count in confusion_matrix[true_cls].items():
-                if count > 0:
-                    logger.info(f"  {true_cls} misclassified as {pred_cls}: {count} times")
-
-        if misclassified_examples:
-            logger.info("Misclassified examples:")
-            for example in misclassified_examples[:5]:
-                logger.info(f"  {example}")
-            if len(misclassified_examples) > 5:
-                logger.info(f"  ... and {len(misclassified_examples) - 5} more")
-
-        # Step 11: Export
+        # Step 10: Export
         model.export(format="onnx")
         logger.info("Model exported to ONNX.")
 
     except Exception as e:
         logger.error(f"Training failed: {e}")
-        return
 
 if __name__ == "__main__":
     main()
