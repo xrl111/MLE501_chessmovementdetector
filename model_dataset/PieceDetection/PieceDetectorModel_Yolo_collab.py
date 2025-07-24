@@ -13,7 +13,7 @@ from concurrent.futures import ProcessPoolExecutor
 import multiprocessing
 
 # Setup logging
-logging.basicConfig(level=logging.INFO)  # Reduced verbosity
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def inspect_dataset(dataset_path, class_names):
@@ -35,7 +35,7 @@ def inspect_dataset(dataset_path, class_names):
                 try:
                     class_id = int(lines[0].strip().split()[0])
                     class_ids[class_id] += 1
-                    if len(sample_labels) < 3:  # Reduced sample size
+                    if len(sample_labels) < 3:
                         sample_labels.append(f"{split}/{label_file}: {lines[0].strip()} (class {class_names[class_id]})")
                 except (ValueError, IndexError):
                     logger.warning(f"Invalid label format in {label_file}")
@@ -77,15 +77,17 @@ def process_image(args):
                 cropped = cv2.cvtColor(img_yuv, cv2.COLOR_YUV2BGR)
             save_name = f"orig_{os.path.basename(img_path).rsplit('.', 1)[0]}_{i}.jpg"
             save_path = os.path.join(output_path, target_split, mapped_class, save_name)
-            os.makedirs(os.path.dirname(save_path), exist_ok=True)
-            cv2.imwrite(save_path, cropped)
+            if not os.path.exists(save_path):
+                os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                cv2.imwrite(save_path, cropped, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
             results.append((target_split, mapped_class, 1))
             for aug_idx in range(aug_count):
-                augmented = augment(image=cropped)
-                img_aug = augmented['image']
                 save_name_aug = f"orig_{os.path.basename(img_path).rsplit('.', 1)[0]}_{i}_aug{aug_idx}.jpg"
                 save_path_aug = os.path.join(output_path, target_split, mapped_class, save_name_aug)
-                cv2.imwrite(save_path_aug, img_aug)
+                if not os.path.exists(save_path_aug):
+                    augmented = augment(image=cropped)
+                    img_aug = augmented['image']
+                    cv2.imwrite(save_path_aug, img_aug, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
                 results.append((target_split, mapped_class, 1))
         return results, mapped_class, len(lines)
     except Exception as e:
@@ -102,21 +104,59 @@ def preprocess_dataset(dataset_path, output_path, class_names, custom_dataset_pa
     excluded_class = "excluded"
     remapped_class_names = sorted([c for c in class_names if c != 'board'])
     file_mapping = {
-        'K.png': 'K', 'N.png': 'N', 'B_g.png': 'B', 'N_g.png': 'N', 'Q_g.png': 'Q',
-        'B.png': 'B', 'R.png': 'R', 'R_g.png': 'R', 'P_g.png': 'P', 'K_g.png': 'K',
-        'P.png': 'P', 'Q.png': 'Q', 'pb_g.png': 'p', 'rb.png': 'r', 'kb.png': 'k',
-        'qb.png': 'q', 'qb_g.png': 'q', 'bb_g.png': 'b', 'nb_g.png': 'n', 'rb_g.png': 'r',
-        'kb_g.png': 'k', 'pb.png': 'p', 'bb.png': 'b', 'nb.png': 'n',
-        'custom_bb.png': 'b', 'b_extra.png': 'b', 'b_extra2.png': 'b', 'custom_bb_g.png': 'b',
-        'custom_nb.png': 'n', 'n_new1.png': 'n', 'n_new2.png': 'n', 'custom_nb_g.png': 'n',
-        'custom_kb.png': 'k', 'k_extra.png': 'k', 'k_extra2.png': 'k', 'custom_kb_g.png': 'k',
-        'custom_pb.png': 'p', 'p_new1.png': 'p', 'p_new2.png': 'p', 'custom_pb_g.png': 'p',
-        'custom_rb.png': 'r', 'r_extra.png': 'r', 'r_extra2.png': 'r', 'custom_rb_g.png': 'r',
-        'custom_qb.png': 'q', 'q_extra.png': 'q', 'q_extra2.png': 'q', 'custom_qb_g.png': 'q'
+        'K.png': 'K',
+        'N.png': 'N',
+        'B_g.png': 'B',
+        'N_g.png': 'N',
+        'Q_g.png': 'Q',
+        'B.png': 'B',
+        'R.png': 'R',
+        'R_g.png': 'R',
+        'P_g.png': 'P',
+        'K_g.png': 'K',
+        'P.png': 'P',
+        'Q.png': 'Q',
+        'pb_g.png': 'p',
+        'rb.png': 'r',
+        'kb.png': 'k',
+        'qb.png': 'q',
+        'qb_g.png': 'q',
+        'bb_g.png': 'b',
+        'nb_g.png': 'n',
+        'rb_g.png': 'r',
+        'kb_g.png': 'k',
+        'pb.png': 'p',
+        'bb.png': 'b',
+        'nb.png': 'n',
+        'custom_bb.png': 'b',
+        'b_extra.png': 'b',
+        'b_extra2.png': 'b',
+        'custom_bb_g.png': 'b',
+        'custom_nb.png': 'n',
+        'n_new1.png': 'n',
+        'n_new2.png': 'n',
+        'custom_nb_g.png': 'n',
+        'custom_kb.png': 'k',
+        'k_extra.png': 'k',
+        'k_extra2.png': 'k',
+        'custom_kb_g.png': 'k',
+        'custom_pb.png': 'p',
+        'p_new1.png': 'p',
+        'p_new2.png': 'p',
+        'custom_pb_g.png': 'p',
+        'custom_rb.png': 'r',
+        'r_extra.png': 'r',
+        'r_extra2.png': 'r',
+        'custom_rb_g.png': 'r',
+        'custom_qb.png': 'q',
+        'q_extra.png': 'q',
+        'q_extra2.png': 'q',
+        'custom_qb_g.png': 'q',
     }
 
+
     augment = Compose([
-        ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0.05, p=0.5),  # Reduced intensity
+        ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0.05, p=0.5),
         GaussNoise(p=0.3),
         RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.5)
     ])
@@ -205,17 +245,19 @@ def preprocess_dataset(dataset_path, output_path, class_names, custom_dataset_pa
             target_split = 'valid' if image_counts['valid'][target_class] < 20 else ('train' if random.random() < 0.8 else 'valid')
             save_name = f"custom_{file_name.rsplit('.', 1)[0]}.jpg"
             save_path = os.path.join(output_path, target_split, target_class, save_name)
-            os.makedirs(os.path.dirname(save_path), exist_ok=True)
-            cv2.imwrite(save_path, img)
+            if not os.path.exists(save_path):
+                os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                cv2.imwrite(save_path, img, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
             image_counts[target_split][target_class] += 1
             remapped_class_counts[target_class] += 1
             aug_count = 2 if target_class.islower() else 1
             for aug_idx in range(aug_count):
-                augmented = augment(image=img)
-                img_aug = augmented['image']
                 save_name_aug = f"custom_{file_name.rsplit('.', 1)[0]}_aug{aug_idx}.jpg"
                 save_path_aug = os.path.join(output_path, target_split, target_class, save_name_aug)
-                cv2.imwrite(save_path_aug, img_aug)
+                if not os.path.exists(save_path_aug):
+                    augmented = augment(image=img)
+                    img_aug = augmented['image']
+                    cv2.imwrite(save_path_aug, img_aug, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
                 image_counts[target_split][target_class] += 1
                 remapped_class_counts[target_class] += 1
             del img
@@ -224,7 +266,7 @@ def preprocess_dataset(dataset_path, output_path, class_names, custom_dataset_pa
         logger.info(f"Total custom files processed: {sum(len(files) for files in custom_files_processed.values())}")
         logger.info(f"Black rook ('r') files found in custom dataset: {r_files_found}")
 
-    TARGET_IMAGES_PER_CLASS = 500  # Reduced for faster processing
+    TARGET_IMAGES_PER_CLASS = 500
     for split in ['train', 'valid']:
         for cls in remapped_class_names:
             cls_dir = os.path.join(output_path, split, cls)
@@ -238,7 +280,7 @@ def preprocess_dataset(dataset_path, output_path, class_names, custom_dataset_pa
                         continue
                     save_name = f"oversample_{cls}_{i}.jpg"
                     save_path = os.path.join(cls_dir, save_name)
-                    cv2.imwrite(save_path, img)
+                    cv2.imwrite(save_path, img, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
                     image_counts[split][cls] += 1
                     remapped_class_counts[cls] += 1
                     del img
@@ -287,15 +329,15 @@ def main():
 
     # Step 7: Load classifier and train
     try:
-        model = YOLO("yolov8n-cls.pt")  # Use nano model for faster training
-        logger.info("YOLOv8n-cls model loaded.")
+        model = YOLO("yolov8m-cls.pt")
+        logger.info("YOLOv8m-cls model loaded.")
         device = 'cpu'
         logger.info(f"Training on device: {device}")
         model.train(
             data=output_path,
-            epochs=50,  # Reduced epochs
+            epochs=50,
             imgsz=224,
-            batch=8,  # Increased batch size for CPU
+            batch=8,
             name="chess_piece_classifier",
             patience=5,
             device=device,
