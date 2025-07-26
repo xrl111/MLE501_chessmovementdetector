@@ -208,7 +208,7 @@ def blur_border(img, border_size=10, blur_kernel=(15, 15)):
 
     return np.clip(result, 0, 255).astype(np.uint8)
 
-def load_model(model_path="/Users/macintoshhd/Downloads/MSE24/2025_semester_02/MLE501.9/final/model_dataset/PieceDetection/best.onnx"):
+def load_model(model_path="/Users/macintoshhd/Downloads/MSE24/2025_semester_02/MLE501.9/final/model_dataset/best.onnx"):
     """Load the ONNX model for chess piece classification."""
     if not os.path.exists(model_path):
         logging.error(f"ONNX model not found at {model_path}")
@@ -745,4 +745,4 @@ def main(start_time=0, end_time=10, frame_interval=1.0):
         cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    main(start_time=200, end_time=203, frame_interval=1)
+    main(start_time=200, end_time=220, frame_interval=1)
