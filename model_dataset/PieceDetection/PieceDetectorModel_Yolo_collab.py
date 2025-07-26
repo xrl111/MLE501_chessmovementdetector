@@ -456,8 +456,14 @@ def main():
         logger.info(f"Validation Top-1 Accuracy: {metrics.top1 * 100:.2f}%")
         logger.info(f"Validation Top-5 Accuracy: {metrics.top5 * 100:.2f}%")
 
-        export_path = os.path.join(working_dir, 'runs/train/chess_piece_classifier/best.onnx')
-        model.export(format='onnx', path=export_path)
+        export_path = os.path.join(working_dir, 'runs/train/chess_piece_classifier/weights/best.onnx')
+        model.export(
+            format='onnx',
+            imgsz=224,
+            simplify=True,
+            opset=12,
+            dynamic=True
+        )
         logger.info(f"Model exported to {export_path}")
     except RuntimeError as e:
         logger.error(f"Training error (possible GPU memory issue): {e}")
