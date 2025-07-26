@@ -9,6 +9,9 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Erosion kernel
+EROSION_KERNEL = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+
 # File mapping from training code
 file_mapping = {
     'K.png': 'K', 'N.png': 'N', 'B_g.png': 'B', 'N_g.png': 'N', 'Q_g.png': 'Q',
@@ -58,8 +61,31 @@ def load_test_images(test_path):
     logger.info(f"Loaded {len(images)} test images from {test_path}")
     return images
 
+def blur_border(img, border_size=10, blur_kernel=(15, 15)):
+    """Apply a blurred border to an image."""
+    h, w = img.shape[:2]
+    blurred = cv2.GaussianBlur(img, blur_kernel, 0)
+
+    mask = np.zeros((h, w), dtype=np.float32)
+    cv2.rectangle(mask, (border_size, border_size), (w - border_size, h - border_size), 1, -1)
+    mask = cv2.GaussianBlur(mask, (border_size * 2 + 1, border_size * 2 + 1), 0)
+
+    if len(img.shape) == 2:
+        result = img.astype(np.float32) * mask + blurred.astype(np.float32) * (1 - mask)
+    else:
+        result = img.astype(np.float32)
+        for c in range(3):
+            result[..., c] = result[..., c] * mask + blurred[..., c] * (1 - mask)
+
+    return np.clip(result, 0, 255).astype(np.uint8)    
+
 def preprocess_image(img):
     """Preprocess image for ONNX model input."""
+
+    img = cv2.resize(img, (224, 224))
+    #img = cv2.erode(img, EROSION_KERNEL, iterations=1)
+    #img = blur_border(img, border_size=6)
+
     img = img.astype(np.float32) / 255.0  # Normalize to [0,1]
     img = img.transpose(2, 0, 1)  # HWC to CHW
     img = np.expand_dims(img, axis=0)  # Add batch dimension
@@ -146,6 +172,8 @@ def main():
 
             logger.info(f"{item['image']} → {pred_class} ({conf:.2f})")
             predictions.append({"image": item['image'], "pred": pred_class, "conf": conf})
+
+            print(f"/n")
         except Exception as e:
             logger.error(f"Error predicting {item['image']}: {e}")
             continue
