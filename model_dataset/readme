@@ -1,6 +1,0 @@
-Model
-dataset
-python training code
-
-
-Yolo8: curl -L "https://universe.roboflow.com/ds/lEIeDLYdtb?key=ytHQpJZNeT" > roboflow.zip; unzip roboflow.zip; rm roboflow.zip
