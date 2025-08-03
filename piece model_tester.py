@@ -26,8 +26,8 @@ file_mapping = {
 class_names = ['B', 'K', 'N', 'P', 'Q', 'R', 'b', 'k', 'n', 'p', 'q', 'r'] # manual read from onx model
 
 # Path to test images and model
-TEST_IMAGE_PATH = "/Users/macintoshhd/Downloads/MSE24/2025_semester_02/MLE501.9/final/templates"
-MODEL_PATH = "/Users/macintoshhd/Downloads/MSE24/2025_semester_02/MLE501.9/final/model_dataset/PieceDetection/best.onnx"
+TEST_IMAGE_PATH = "templates"
+MODEL_PATH = "model_dataset/PieceDetection/best.onnx"
 
 def load_test_images(test_path):
     """Load test images and their expected labels."""

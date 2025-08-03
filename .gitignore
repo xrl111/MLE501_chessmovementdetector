@@ -1,0 +1,102 @@
+# Chess Movement Detector - .gitignore
+
+# Generated output files
+*.mp4
+*.avi
+*.mov
+*.mkv
+detection_result_*.jpg
+detection_result_*.png
+enhanced_*.mp4
+moves_*.mp4
+detected_*.mp4
+game_data_*.json
+single_test_result.jpg
+frame_*.jpg
+
+# Test images (keep only examples)
+test1.png
+test2.png
+Screenshot*.png
+
+# Model weights (too large for git)
+*.pt
+!model_dataset/PieceDetection/best.pt
+yolo*.pt
+*.weights
+*.pth
+
+# Dataset files (too large)
+roboflow.zip
+yolo_dataset/
+train/
+valid/
+test/
+chess_training/
+chess_training_windows/
+chess_gpu_training/
+model_test_results/
+
+# Debug and temporary files
+debug_frames/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Environment files
+.env
+.venv
+env/
+venv/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pytest
+.pytest_cache/
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+
+# Logs
+*.log
+logs/
+
+# Large data files
+templates/

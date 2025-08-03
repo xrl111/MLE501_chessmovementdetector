@@ -22,7 +22,7 @@ EROSION_KERNEL = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
 selected_points = []
 click_count = 0
 
-def load_cnn_model(model_path="/Users/macintoshhd/Downloads/MSE24/2025_semester_02/MLE501.9/final/model_dataset/PieceDetection/piece_classifier_model.h5"):
+def load_cnn_model(model_path="model_dataset/PieceDetection/piece_classifier_model.h5"):
     """Load the pre-trained CNN model for piece detection."""
     piece_classes = [
         'WhitePawn', 'WhiteRook', 'WhiteKnight', 'WhiteBishop', 'WhiteQueen', 'WhiteKing',

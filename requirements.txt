@@ -1,0 +1,25 @@
+# Chess Movement Detector - Dependencies
+
+# Core ML/CV libraries
+opencv-python>=4.8.0
+ultralytics>=8.0.0
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Data processing
+numpy>=1.24.0
+matplotlib>=3.7.0
+
+# GUI and file handling
+tkinter-dev>=0.1.0
+Pillow>=9.5.0
+
+# Model format support
+onnxruntime>=1.15.0
+
+# Optional: for enhanced functionality
+albumentations>=1.3.0
+scipy>=1.10.0
+
+# Development and testing
+pytest>=7.0.0
